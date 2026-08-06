@@ -29,9 +29,25 @@ Three sound modes, all with optional binaural beat (per-voice detune between ear
 | Harmonics | root · fifth · octave · 12th | Warm natural overtone stack |
 | Minor Chord | root · 6/5 · 3/2 (just intonation) | Smooth minor triad — A–C–E at the default 220 Hz root |
 
+## Install (PWA)
+
+The app is installable and works offline once loaded.
+
+- **Desktop Chrome/Edge:** click the install icon in the address bar, or the **Install App** button in the app
+- **Android Chrome:** menu → *Add to Home screen*
+- **iOS Safari:** Share → *Add to Home Screen*
+
+Installed, it launches in its own window with no browser chrome and runs without a connection.
+
+## Screen & Display
+
+- **Keep screen awake** — uses the Screen Wake Lock API so your display won't dim or sleep mid-session (on by default; Chrome, Edge, and Android — Safari support varies)
+- **Fullscreen** — button, or press `F`. Hides all controls except Start/Stop and scales the canvas to fill the screen
+- **Auto fullscreen** — optional toggle in the Session tab to enter fullscreen whenever a session starts
+
 ## Usage
 
-1. Download `emdr_master.html` (or clone the repo)
+1. Download `index.html` (or clone the repo)
 2. Open it in any modern browser
 3. Put on headphones
 4. Optionally toggle **Master Mode**, then **Start Session**

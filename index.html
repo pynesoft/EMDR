@@ -2,8 +2,17 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>EMDR — Master Mode</title>
+<meta name="description" content="A browser-based EMDR tool with Master Mode — an experimental right-hemisphere awakening phase with a retro depth field and harmonic binaural audio.">
+<meta name="theme-color" content="#0d0f14">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="EMDR">
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400&family=DM+Sans:wght@300;400;500&display=swap');
 
@@ -111,6 +120,24 @@
   .save-indicator.show { opacity: 1; }
 
   .hint { grid-column: 1/-1; font-family: 'DM Mono', monospace; font-size: 9px; color: var(--text-dim); line-height: 1.7; }
+
+  /* Safe area for installed/standalone display */
+  body { padding-top: max(20px, env(safe-area-inset-top)); padding-bottom: max(32px, env(safe-area-inset-bottom)); }
+
+  .secondary-row button { padding: 10px; font-size: 10px; }
+
+  /* Immersive: strip the UI down to the canvas while a session runs fullscreen */
+  body.immersive { justify-content: center; background: #000; }
+  body.immersive header,
+  body.immersive .tabs,
+  body.immersive .panel,
+  body.immersive .status,
+  body.immersive .secondary-row { display: none !important; }
+  body.immersive .canvas-wrap { max-width: 100%; border: none; background: #000; }
+  body.immersive .btn-row { max-width: 420px; opacity: 0.35; transition: opacity 0.3s; }
+  body.immersive .btn-row:hover { opacity: 1; }
+
+  .wake-badge { font-family: 'DM Mono', monospace; font-size: 9px; letter-spacing: 0.1em; color: var(--success); }
 </style>
 </head>
 <body>
@@ -130,6 +157,11 @@
   <button id="startBtn" class="primary" onclick="toggleSession()">Start Session</button>
   <button id="tapBtn" onclick="tapTempo()">Tap Tempo</button>
   <button id="masterBtn" onclick="toggleMasterMode()">Master Mode</button>
+</div>
+
+<div class="btn-row secondary-row">
+  <button id="fsBtn" onclick="toggleFullscreen()">⛶ Fullscreen</button>
+  <button id="installBtn" onclick="promptInstall()" style="display:none;">↓ Install App</button>
 </div>
 
 <div class="tabs">
@@ -256,6 +288,14 @@
   </div>
   <div class="hint">In Master Mode the session opens with the Awakening phase — sweeps drift only rightward-to-leftward and sound sits in the left ear, both feeding the right hemisphere (left visual field and left ear project contralaterally). After the set time it transitions into standard bilateral EMDR for the rest of the session. Keep your gaze soft and centered; let the motion pull into your left field.</div>
   <div class="section-label">Preferences</div>
+  <div class="toggle-row full" onclick="toggleWakeLock()">
+    <div class="toggle on" id="wakeLockToggle"></div>
+    Keep screen awake during a session
+  </div>
+  <div class="toggle-row full" onclick="toggleAutoFullscreen()">
+    <div class="toggle" id="autoFsToggle"></div>
+    Go fullscreen automatically when a session starts
+  </div>
   <div class="toggle-row full" onclick="toggleAutoSave()">
     <div class="toggle on" id="autoSaveToggle"></div>
     Auto-save settings to this browser
@@ -317,6 +357,12 @@ const state = {
   fxCtx: null,
   fxGain: null,
   fxVolume: 0.8,
+
+  // Screen / display
+  wakeLockEnabled: true,
+  wakeLock: null,
+  autoFullscreen: false,
+  deferredInstall: null,
 };
 
 const SOUND_MODES = {
@@ -334,7 +380,9 @@ const CH = () => canvas.height / DPR();
 function resizeCanvas() {
   const wrap = canvas.parentElement;
   const dpr = DPR();
-  const ch = state.masterMode ? 220 : 120;
+  const immersive = document.body.classList.contains('immersive');
+  let ch = state.masterMode ? 220 : 120;
+  if (immersive) ch = Math.max(ch, Math.round(window.innerHeight * (state.masterMode ? 0.72 : 0.45)));
   canvas.width = wrap.clientWidth * dpr;
   canvas.height = ch * dpr;
   ctx.scale(dpr, dpr);
@@ -651,12 +699,110 @@ function updatePhaseOverlay() {
   }
 }
 
+// ─── Screen Wake Lock ────────────────────────────────────────────────────────
+async function acquireWakeLock() {
+  if (!state.wakeLockEnabled) return;
+  if (!('wakeLock' in navigator)) return;
+  try {
+    state.wakeLock = await navigator.wakeLock.request('screen');
+    state.wakeLock.addEventListener('release', () => { state.wakeLock = null; });
+  } catch (e) { /* denied, low battery, or unsupported — session still runs */ }
+}
+
+function releaseWakeLock() {
+  if (state.wakeLock) { try { state.wakeLock.release(); } catch(e){} state.wakeLock = null; }
+}
+
+// Browsers drop the lock when the tab is hidden — take it back on return
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.running && !state.wakeLock) acquireWakeLock();
+});
+
+function toggleWakeLock() {
+  state.wakeLockEnabled = !state.wakeLockEnabled;
+  document.getElementById('wakeLockToggle').classList.toggle('on', state.wakeLockEnabled);
+  if (state.running) { state.wakeLockEnabled ? acquireWakeLock() : releaseWakeLock(); }
+  if (state.autoSave) debounceSave();
+}
+
+// ─── Fullscreen ──────────────────────────────────────────────────────────────
+function isFullscreen() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }
+
+function toggleFullscreen() {
+  if (isFullscreen()) {
+    (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+  } else {
+    const el = document.documentElement;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (req) req.call(el).catch(()=>{});
+    else { // iOS Safari has no Fullscreen API — fake it
+      document.body.classList.add('immersive');
+      setTimeout(resizeCanvas, 60);
+      updateFsButton();
+    }
+  }
+}
+
+function applyImmersive(on) {
+  document.body.classList.toggle('immersive', on);
+  setTimeout(resizeCanvas, 60);
+  updateFsButton();
+}
+
+function updateFsButton() {
+  const btn = document.getElementById('fsBtn');
+  const on = isFullscreen() || document.body.classList.contains('immersive');
+  btn.textContent = on ? '⛶ Exit Fullscreen' : '⛶ Fullscreen';
+}
+
+['fullscreenchange','webkitfullscreenchange'].forEach(ev =>
+  document.addEventListener(ev, () => applyImmersive(isFullscreen()))
+);
+
+// Escape leaves the faux-fullscreen used on iOS
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !isFullscreen() && document.body.classList.contains('immersive')) applyImmersive(false);
+  if (e.key === 'f' && !e.metaKey && !e.ctrlKey && e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT') toggleFullscreen();
+});
+
+function toggleAutoFullscreen() {
+  state.autoFullscreen = !state.autoFullscreen;
+  document.getElementById('autoFsToggle').classList.toggle('on', state.autoFullscreen);
+  if (state.autoSave) debounceSave();
+}
+
+// ─── Install (PWA) ───────────────────────────────────────────────────────────
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  state.deferredInstall = e;
+  document.getElementById('installBtn').style.display = '';
+});
+
+async function promptInstall() {
+  if (!state.deferredInstall) return;
+  state.deferredInstall.prompt();
+  await state.deferredInstall.userChoice;
+  state.deferredInstall = null;
+  document.getElementById('installBtn').style.display = 'none';
+}
+
+window.addEventListener('appinstalled', () => {
+  document.getElementById('installBtn').style.display = 'none';
+  setStatus('Installed — launch it from your home screen or app list', false);
+});
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(()=>{}));
+}
+
 // ─── Session ─────────────────────────────────────────────────────────────────
 function toggleSession() { state.running ? stopSession() : startSession(); }
 
 function startSession() {
   state.running = true;
   state.trailPoints = [];
+  acquireWakeLock();
+  if (state.autoFullscreen && !isFullscreen() && !document.body.classList.contains('immersive')) toggleFullscreen();
   const w = CW(), margin = w * (1 - state.travelWidth) / 2;
   const L = margin + state.dotRadius, R = w - margin - state.dotRadius;
 
@@ -699,6 +845,7 @@ function startSession() {
 
 function stopSession() {
   state.running = false;
+  releaseWakeLock();
   if (state.animId) { cancelAnimationFrame(state.animId); state.animId = null; }
   if (state.sessionInterval) { clearInterval(state.sessionInterval); state.sessionInterval = null; }
   stopAudio(); state.trailPoints = [];
@@ -893,6 +1040,7 @@ function savePrefs() {
       baseFreq:state.baseFreq, beatFreq:state.beatFreq, volume:state.volume, fxVolume:state.fxVolume,
       sessionDuration:state.sessionDuration,
       masterMode:state.masterMode, soundMode:state.soundMode, awakenDuration:state.awakenDuration,
+      wakeLockEnabled:state.wakeLockEnabled, autoFullscreen:state.autoFullscreen,
     }));
     const ind = document.getElementById('saveIndicator');
     ind.classList.add('show'); setTimeout(()=>ind.classList.remove('show'), 2000);
@@ -918,6 +1066,8 @@ function loadPrefs() {
     if (p.fxVolume!=null) { state.fxVolume=p.fxVolume; document.getElementById('fxVolume').value=Math.round(p.fxVolume*100); document.getElementById('fxVolVal').textContent=Math.round(p.fxVolume*100)+'%'; }
     if (p.sessionDuration!=null) { state.sessionDuration=p.sessionDuration; document.getElementById('duration').value=p.sessionDuration; updateDuration(p.sessionDuration); }
     if (p.awakenDuration!=null) { state.awakenDuration=p.awakenDuration; document.getElementById('awakenDuration').value=p.awakenDuration; updateAwakenDuration(p.awakenDuration); }
+    if (p.wakeLockEnabled === false) { state.wakeLockEnabled = false; document.getElementById('wakeLockToggle').classList.remove('on'); }
+    if (p.autoFullscreen) { state.autoFullscreen = true; document.getElementById('autoFsToggle').classList.add('on'); }
     if (p.soundMode) { setSoundMode(p.soundMode); }
     if (p.masterMode) { toggleMasterMode(); }
     updateChordDisplay();
