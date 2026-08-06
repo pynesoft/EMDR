@@ -2,6 +2,8 @@
 
 A single-file, browser-based EMDR (Eye Movement Desensitization & Reprocessing) tool with a twist: **Master Mode**, an experimental right-hemisphere "awakening" phase inspired by Iain McGilchrist's *The Master and His Emissary*.
 
+https://pynesoft.github.io/EMDR/
+
 No install, no build step, no server, no tracking. One HTML file. Open it and go.
 
 ## Features
